@@ -1,0 +1,103 @@
+name: Flatfile boundary validation
+on:
+  push:
+    branches: [ci/flatfile-validation]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: flatfile-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  SOURCE_COMMIT: 1d11bd83d892d5bdac759e98321899d60f7c84e8
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        bits: [64, 32]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+          path: source
+          persist-credentials: false
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential g++-multilib cmake ninja-build libboost-dev
+          g++ --version
+          cmake --version
+          uname -a
+      - name: Configure
+        shell: bash
+        run: |
+          flags=()
+          if [ '${{ matrix.bits }}' = 32 ]; then
+            flags+=('-DCMAKE_C_FLAGS=-m32' '-DCMAKE_CXX_FLAGS=-m32')
+          fi
+          cmake -S source -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DBUILD_GUI=OFF -DWITH_CCACHE=OFF \
+            '-DCMAKE_C_FLAGS_DEBUG=-O0 -g1' '-DCMAKE_CXX_FLAGS_DEBUG=-O0 -g1' "${flags[@]}"
+      - name: Build
+        run: cmake --build build --target test_bitcoin --parallel 2
+      - name: Boundary tests and control
+        run: python3 .ci/flatfile-checks.py --profile linux${{ matrix.bits }}
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux${{ matrix.bits }}-evidence
+          path: |
+            results/
+            build/CMakeCache.txt
+            build/Testing/Temporary/LastTest.log
+          retention-days: 30
+  windows:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: 1
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_COMMIT }}
+          path: source
+          persist-credentials: false
+      - name: Visual Studio environment
+        shell: bash
+        run: py -3 source/.github/ci-windows.py standard github_import_vs_env
+      - name: Configure
+        shell: bash
+        run: |
+          cd source
+          cmake --version
+          clang-cl --version
+          cmake -B ../build --preset windows \
+            -DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON -DVCPKG_MANIFEST_FEATURES=tests \
+            -DVCPKG_HOST_TRIPLET=x64-windows-release -DVCPKG_TARGET_TRIPLET=x64-windows-release \
+            -DENABLE_WALLET=OFF -DENABLE_IPC=OFF -DBUILD_GUI=OFF -DWITH_ZMQ=OFF -DWITH_CCACHE=OFF
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release --target test_bitcoin --parallel 2
+      - name: Boundary tests and control
+        shell: bash
+        run: py -3 .ci/flatfile-checks.py --profile windows64 --config Release
+      - name: Evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows64-evidence
+          path: |
+            results/
+            build/CMakeCache.txt
+            build/Testing/Temporary/LastTest.log
+          retention-days: 30
