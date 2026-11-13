@@ -1,23 +1,28 @@
 name: Flatfile boundary validation
 on:
-  push:
-    branches: [ci/flatfile-validation]
   workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        description: Platform selection
+        default: all
+        options: [all, linux64, linux32, windows64]
 permissions:
   contents: read
 concurrency:
-  group: flatfile-${{ github.ref }}
+  group: flatfile-${{ github.ref }}-${{ inputs.profile }}
   cancel-in-progress: true
 env:
   SOURCE_COMMIT: 1d11bd83d892d5bdac759e98321899d60f7c84e8
 jobs:
   linux:
+    if: inputs.profile != 'windows64'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        bits: [64, 32]
+        bits: ${{ fromJSON(inputs.profile == 'linux32' && '[32]' || inputs.profile == 'linux64' && '[64]' || '[64,32]') }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -29,8 +34,15 @@ jobs:
           persist-credentials: false
       - name: Dependencies
         run: |
+          if [ '${{ matrix.bits }}' = 32 ]; then
+            sudo dpkg --add-architecture i386
+          fi
           sudo apt-get update
-          sudo apt-get install -y build-essential g++-multilib cmake ninja-build libboost-dev
+          boost=libboost-dev
+          if [ '${{ matrix.bits }}' = 32 ]; then
+            boost=libboost-dev:i386
+          fi
+          sudo apt-get install -y build-essential g++-multilib cmake ninja-build "$boost"
           g++ --version
           cmake --version
           uname -a
@@ -59,6 +71,7 @@ jobs:
             build/Testing/Temporary/LastTest.log
           retention-days: 30
   windows:
+    if: inputs.profile == 'all' || inputs.profile == 'windows64'
     runs-on: windows-2025-vs2026
     timeout-minutes: 90
     env:
